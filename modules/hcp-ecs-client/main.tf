@@ -1,3 +1,7 @@
+locals {
+  secret_prefix = "consul-ecs-test"
+}
+
 data "aws_ami" "ubuntu" {
   most_recent = true
 
@@ -58,7 +62,8 @@ resource "random_id" "id" {
 }
 
 resource "aws_secretsmanager_secret" "bootstrap_token" {
-  name  = "consul-ecs-bootstrap-token"
+  name  = "${local.secret_prefix}-bootstrap-token"
+  recovery_window_in_days = 0
 }
 
 resource "aws_secretsmanager_secret_version" "bootstrap_token" {
@@ -67,16 +72,18 @@ resource "aws_secretsmanager_secret_version" "bootstrap_token" {
 }
 
 resource "aws_secretsmanager_secret" "ca_cert" {
-  name  = "consul-ecs-client-ca-cert"
+  name  = "${local.secret_prefix}-client-ca-cert"
+  recovery_window_in_days = 0
 }
 
 resource "aws_secretsmanager_secret_version" "ca_cert" {
   secret_id     = aws_secretsmanager_secret.ca_cert.id
-  secret_string = var.client_ca_file
+  secret_string = base64decode(var.client_ca_file)
 }
 
 resource "aws_secretsmanager_secret" "gossip_key" {
-  name  = "consul-ecs-gossip-encryption-key"
+  name  = "${local.secret_prefix}-gossip-encryption-key"
+  recovery_window_in_days = 0
 }
 
 resource "aws_secretsmanager_secret_version" "gossip_key" {
@@ -85,9 +92,8 @@ resource "aws_secretsmanager_secret_version" "gossip_key" {
 }
 
 
-module "consul-ecs_acl-controller" {
-  source  = "hashicorp/consul-ecs/aws//modules/acl-controller"
-  version = "0.2.0-beta2"
+module "acl-controller" {
+  source = "git::https://github.com/hashicorp/terraform-aws-consul-ecs.git//modules/acl-controller?ref=pglass/expose-public-ip-setting"
 
   log_configuration = {
     logDriver = "awslogs"
@@ -98,23 +104,23 @@ module "consul-ecs_acl-controller" {
     }
   }
 
-  consul_bootstrap_token_secret_arn = aws_secretsmanager_secret.bootstrap_token.arn
   consul_server_http_addr           = var.consul_url
-  consul_server_ca_cert_arn         = aws_secretsmanager_secret.ca_cert.arn
+  consul_bootstrap_token_secret_arn = aws_secretsmanager_secret.bootstrap_token.arn
   ecs_cluster_arn                   = aws_ecs_cluster.clients.arn
   region                            = var.region
   subnets                           = [var.subnet_id]
-  // TODO: make unique
-  name_prefix                       = "consul-ecs"
+
+  name_prefix                       = local.secret_prefix
+
+  assign_public_ip = true
 }
 
 resource "aws_cloudwatch_log_group" "log_group" {
   name = "something-log"
 }
 
-module "product-db" {
-  source  = "hashicorp/consul-ecs/aws//modules/mesh-task"
-  version = "0.2.0-beta2"
+module "product_db" {
+  source = "git::https://github.com/hashicorp/terraform-aws-consul-ecs.git//modules/mesh-task?ref=pglass/expose-public-ip-setting"
 
   family                = "product-db"
   container_definitions = [
@@ -159,15 +165,31 @@ module "product-db" {
   }
 
   port       = "5432"
+  consul_ecs_image = "docker.mirror.hashicorp.services/hashicorpdev/consul-ecs:latest"
+
   retry_join = var.client_retry_join
+  consul_datacenter = var.datacenter
 
   tls                            = true
   consul_server_ca_cert_arn      = aws_secretsmanager_secret.ca_cert.arn
   gossip_key_secret_arn          = aws_secretsmanager_secret.gossip_key.arn
 
   acls                           = true
-  consul_client_token_secret_arn = module.consul-ecs_acl-controller.client_token_secret_arn
+  consul_client_token_secret_arn = module.acl-controller.client_token_secret_arn
   // TODO: use the unique name from above
-  acl_secret_name_prefix         = "consul-ecs"
+  acl_secret_name_prefix         = local.secret_prefix
 }
 
+resource "aws_ecs_service" "product_db" {
+  name            = "product-db"
+  cluster         = aws_ecs_cluster.clients.arn
+  task_definition = module.product_db.task_definition_arn
+  desired_count   = 1
+  network_configuration {
+    subnets = [var.subnet_id]
+    assign_public_ip = true
+  }
+  launch_type            = "FARGATE"
+  propagate_tags         = "TASK_DEFINITION"
+  enable_execute_command = true
+}

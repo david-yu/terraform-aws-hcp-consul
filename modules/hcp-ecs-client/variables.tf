@@ -41,8 +41,13 @@ variable "client_gossip_key" {
 }
 
 variable "client_retry_join" {
+  type = list(string)
+  description = "The retry join endpoints"
+}
+
+variable "datacenter" {
   type = string
-  description = "The retry join endpoint"
+  description = "The consul datacenter"
 }
 
 variable "region" {

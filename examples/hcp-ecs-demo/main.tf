@@ -51,14 +51,11 @@ module "aws_ecs_cluster" {
   client_config_file       = hcp_consul_cluster.main.consul_config_file
   client_ca_file           = hcp_consul_cluster.main.consul_ca_file
   client_gossip_key        = jsondecode(base64decode(hcp_consul_cluster.main.consul_config_file))["encrypt"]
-  client_retry_join        = jsondecode(base64decode(hcp_consul_cluster.main.consul_config_file))["retry_join"][0]
+  client_retry_join        = jsondecode(base64decode(hcp_consul_cluster.main.consul_config_file))["retry_join"]
   region                   = var.region
   root_token               = hcp_consul_cluster_root_token.token.secret_id
-  consul_url = hcp_consul_cluster.main.public_endpoint ? (
-    hcp_consul_cluster.main.consul_public_endpoint_url
-    ) : (
-    hcp_consul_cluster.main.consul_private_endpoint_url
-  )
+  consul_url = hcp_consul_cluster.main.consul_private_endpoint_url
+  datacenter = var.cluster_id
 
   depends_on = [module.aws_hcp_consul]
 }
